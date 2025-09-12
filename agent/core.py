@@ -402,20 +402,18 @@ class AgentCore:
             session.transport.attach_channel(data_channel)
 
             # Set up ICE candidate handler
-            def on_ice_candidate(event):
+            async def on_icecandidate(event):
                 candidate = event.candidate
-                logger.debug(
-                    f"[ICE_CALLBACK] {peer_id}: ICE candidate event received, candidate={candidate}"
-                )
-                asyncio.create_task(self._send_candidate(peer_id, candidate))
-                if candidate is not None:
-                    self._log_ice_candidate(peer_id, candidate)
-                else:
-                    logger.debug(
-                        f"[ICE_CALLBACK] {peer_id}: End-of-candidates event received"
-                    )
+                if candidate is None:
+                    logger.info(f"[END_OF_CANDIDATES] peer={peer_id}")
+                    await self._send_candidate(peer_id, None)
+                    return
 
-            session.pc.on("icecandidate", on_ice_candidate)
+                cand_sdp = candidate.to_sdp()
+                logger.info(f"[NEW_CANDIDATE] peer={peer_id}, SDP={cand_sdp}")
+                await self._send_candidate(peer_id, candidate)
+
+            session.pc.on("icecandidate", on_icecandidate)
 
             # Send end-of-candidates when gathering completes
             def on_ice_gathering_state_change():
@@ -492,20 +490,18 @@ class AgentCore:
         pc.on("connectionstatechange", on_connection_state_change)
 
         # Set up ICE events
-        def on_ice_candidate(event):
+        async def on_icecandidate(event):
             candidate = event.candidate
-            logger.debug(
-                f"[ICE_CALLBACK] {peer_id}: ICE candidate event received, candidate={candidate}"
-            )
-            asyncio.create_task(self._send_candidate(peer_id, candidate))
-            if candidate is not None:
-                self._log_ice_candidate(peer_id, candidate)
-            else:
-                logger.debug(
-                    f"[ICE_CALLBACK] {peer_id}: End-of-candidates event received"
-                )
+            if candidate is None:
+                logger.info(f"[END_OF_CANDIDATES] peer={peer_id}")
+                await self._send_candidate(peer_id, None)
+                return
 
-        pc.on("icecandidate", on_ice_candidate)
+            cand_sdp = candidate.to_sdp()
+            logger.info(f"[NEW_CANDIDATE] peer={peer_id}, SDP={cand_sdp}")
+            await self._send_candidate(peer_id, candidate)
+
+        pc.on("icecandidate", on_icecandidate)
 
         def on_ice_gathering_state_change():
             logger.info(
@@ -529,7 +525,7 @@ class AgentCore:
         """Send ICE candidate to peer."""
         try:
             if candidate is None:
-                logger.info(f"[END_OF_CANDIDATES] peer={peer_id}")
+                # Send end-of-candidates signal
                 candidate_msg = {
                     "type": MessageType.CANDIDATE,
                     "from": self.settings.agent_id,
@@ -549,30 +545,19 @@ class AgentCore:
                 )
                 return
 
-            # Extract candidate information
-            cand_sdp = candidate.to_sdp()
-            candidate_type = self._parse_candidate_type(cand_sdp)
-
-            logger.info(
-                f"[SEND_CANDIDATE] {peer_id}: Sending ICE candidate (type: {candidate_type})"
-            )
-            logger.debug(f"[SEND_CANDIDATE] {peer_id}: SDP={cand_sdp}")
-            logger.debug(
-                f"[SEND_CANDIDATE] {peer_id}: sdpMid={candidate.sdpMid}, sdpMLineIndex={candidate.sdpMLineIndex}"
-            )
-
+            # Send ICE candidate
             candidate_msg = {
                 "type": MessageType.CANDIDATE,
                 "from": self.settings.agent_id,
                 "to": peer_id,
-                "candidate": cand_sdp,
+                "candidate": candidate.to_sdp(),
                 "sdpMid": candidate.sdpMid,
                 "sdpMLineIndex": candidate.sdpMLineIndex,
             }
 
             await self.signaling.send(candidate_msg)
             logger.info(
-                f"[SEND_CANDIDATE_SUCCESS] {peer_id}: ICE candidate sent successfully (type: {candidate_type})"
+                f"[SEND_CANDIDATE_SUCCESS] peer={peer_id} - candidate sent successfully"
             )
 
         except Exception as e:
