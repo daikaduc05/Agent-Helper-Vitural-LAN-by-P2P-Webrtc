@@ -208,7 +208,7 @@ def create_rtc_configuration(ice_servers: List[Dict[str, Any]]) -> "RTCConfigura
             )
             rtc_ice_servers.append(rtc_server)
 
-        return RTCConfiguration(iceServers=rtc_ice_servers)
+        return RTCConfiguration(iceServers=rtc_ice_servers, iceTransportPolicy="relay")
     except ImportError:
         logger.warning("aiortc not available, cannot create RTCConfiguration")
         return None
