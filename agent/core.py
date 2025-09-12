@@ -396,7 +396,7 @@ class AgentCore:
 
         # Create peer connection
         pc = RTCPeerConnection(self.rtc_config)
-
+        logger.info(f"Created RTCPeerConnection with config: {self.rtc_config.iceServers}")
         # Create transport
         transport = create_transport(self.settings.mode)
 
@@ -444,6 +444,7 @@ class AgentCore:
     async def _send_candidate(self, peer_id: str, candidate: RTCIceCandidate) -> None:
         """Send ICE candidate to peer."""
         try:
+            logger.info(f"[SEND_CANDIDATE] peer={peer_id}, candidate obj={candidate!r}")
             if candidate is None:
                 logger.info(f"{peer_id}: ICE gathering complete")
                 candidate_msg = {
@@ -460,6 +461,7 @@ class AgentCore:
                 return
 
             cand_sdp = candidate.to_sdp()
+            logger.info(f"[SEND_CANDIDATE] peer={peer_id}, SDP={cand_sdp}")
 
             candidate_msg = {
                 "type": MessageType.CANDIDATE,
