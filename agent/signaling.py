@@ -62,10 +62,10 @@ class AnswerMessage(SignalingMessage):
 
 
 class CandidateMessage(SignalingMessage):
-    """ICE candidate message."""
+    """ICE candidate message. 'candidate' may be None for end-of-candidates."""
 
     type: MessageType = MessageType.CANDIDATE
-    candidate: Dict[str, Any]
+    candidate: Optional[Dict[str, Any]] = None
     from_id: str = Field(..., alias="from")
     to: str
 
