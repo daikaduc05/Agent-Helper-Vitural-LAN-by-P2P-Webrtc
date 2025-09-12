@@ -108,18 +108,20 @@ class AgentCore:
             ctype = self._parse_candidate_type(cand_sdp)
 
             if ctype:
-                logger.info(
+                logger.info(f"NEW_CANDIDATE peer={peer_id} SDP={cand_sdp}")
+                logger.debug(
                     f"[ICE_CANDIDATE_GATHERED] {peer_id}: ICE candidate type: {ctype}"
                 )
-                logger.debug(f"[ICE_CANDIDATE_GATHERED] {peer_id}: SDP={cand_sdp}")
                 logger.debug(
                     f"[ICE_CANDIDATE_GATHERED] {peer_id}: sdpMid={candidate.sdpMid}, sdpMLineIndex={candidate.sdpMLineIndex}"
                 )
             else:
                 logger.warning(
+                    f"NEW_CANDIDATE peer={peer_id} SDP={cand_sdp} (type unknown)"
+                )
+                logger.debug(
                     f"[ICE_CANDIDATE_GATHERED] {peer_id}: ICE candidate type unknown"
                 )
-                logger.debug(f"[ICE_CANDIDATE_GATHERED] {peer_id}: SDP={cand_sdp}")
         except Exception as e:
             logger.error(
                 f"[ICE_CANDIDATE_GATHERED_ERROR] {peer_id}: Error logging candidate: {e}"
@@ -402,9 +404,16 @@ class AgentCore:
             # Set up ICE candidate handler
             def on_ice_candidate(event):
                 candidate = event.candidate
+                logger.debug(
+                    f"[ICE_CALLBACK] {peer_id}: ICE candidate event received, candidate={candidate}"
+                )
                 asyncio.create_task(self._send_candidate(peer_id, candidate))
                 if candidate is not None:
                     self._log_ice_candidate(peer_id, candidate)
+                else:
+                    logger.debug(
+                        f"[ICE_CALLBACK] {peer_id}: End-of-candidates event received"
+                    )
 
             session.pc.on("icecandidate", on_ice_candidate)
 
@@ -485,9 +494,16 @@ class AgentCore:
         # Set up ICE events
         def on_ice_candidate(event):
             candidate = event.candidate
+            logger.debug(
+                f"[ICE_CALLBACK] {peer_id}: ICE candidate event received, candidate={candidate}"
+            )
             asyncio.create_task(self._send_candidate(peer_id, candidate))
             if candidate is not None:
                 self._log_ice_candidate(peer_id, candidate)
+            else:
+                logger.debug(
+                    f"[ICE_CALLBACK] {peer_id}: End-of-candidates event received"
+                )
 
         pc.on("icecandidate", on_ice_candidate)
 
@@ -513,9 +529,7 @@ class AgentCore:
         """Send ICE candidate to peer."""
         try:
             if candidate is None:
-                logger.info(
-                    f"[END_OF_CANDIDATES] {peer_id}: ICE gathering complete - sending end-of-candidates signal"
-                )
+                logger.info(f"[END_OF_CANDIDATES] peer={peer_id}")
                 candidate_msg = {
                     "type": MessageType.CANDIDATE,
                     "from": self.settings.agent_id,
@@ -524,7 +538,7 @@ class AgentCore:
                 }
                 await self.signaling.send(candidate_msg)
                 logger.info(
-                    f"[END_OF_CANDIDATES] {peer_id}: End-of-candidates signal sent successfully"
+                    f"[END_OF_CANDIDATES] peer={peer_id} - signal sent successfully"
                 )
                 return
 
