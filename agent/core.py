@@ -85,6 +85,61 @@ class AgentCore:
 
         logger.info(f"Agent core initialized for {settings.agent_id}")
 
+    def _parse_candidate_type(self, candidate_sdp: str) -> Optional[str]:
+        """Extract ICE candidate type from SDP attribute string."""
+        try:
+            # candidate line contains " typ <type>"
+            parts = candidate_sdp.split()
+            if "typ" in parts:
+                idx = parts.index("typ")
+                if idx + 1 < len(parts):
+                    return parts[idx + 1]
+        except Exception:
+            pass
+        return None
+
+    def _log_ice_candidate(self, peer_id: str, candidate: RTCIceCandidate) -> None:
+        """Log the ICE candidate type (host/srflx/relay/prflx)."""
+        ctype = self._parse_candidate_type(candidate.candidate or "")
+        if ctype:
+            logger.info(f"Peer {peer_id} gathered ICE candidate type: {ctype}")
+        else:
+            logger.info(f"Peer {peer_id} gathered ICE candidate (type unknown)")
+
+    def _log_selected_ice_pair(self, peer_id: str) -> None:
+        """Log the selected ICE candidate pair types when available."""
+        session = self.peer_sessions.get(peer_id)
+        if not session:
+            return
+        try:
+            # For data channels, go through SCTP -> DTLS -> ICE
+            if (
+                session.pc.sctp
+                and session.pc.sctp.transport
+                and session.pc.sctp.transport.transport
+            ):
+                ice_transport = session.pc.sctp.transport.transport
+                pair = ice_transport.getSelectedCandidatePair()
+                if pair and pair.local and pair.remote:
+                    local_type = getattr(pair.local, "type", None)
+                    remote_type = getattr(pair.remote, "type", None)
+                    logger.info(
+                        f"Peer {peer_id} selected ICE pair: local={local_type}, remote={remote_type}"
+                    )
+                    return
+        except Exception as e:
+            logger.debug(f"Peer {peer_id} could not get selected ICE pair: {e}")
+
+    async def _on_ice_connection_state_change(self, peer_id: str) -> None:
+        """Handle ICE connection state changes and log selected pair."""
+        session = self.peer_sessions.get(peer_id)
+        if not session:
+            return
+        state = session.pc.iceConnectionState
+        logger.info(f"Peer {peer_id} ICE connection state: {state}")
+        if state in ["connected", "completed"]:
+            self._log_selected_ice_pair(peer_id)
+
     async def start(self) -> None:
         """Start agent core and begin processing signaling messages."""
         logger.info("Starting agent core")
@@ -224,9 +279,10 @@ class AgentCore:
         session = self.peer_sessions[from_id]
 
         try:
-            # Handle end-of-candidates
+            # Handle end-of-candidates: must signal to aiortc
             if candidate_data is None:
                 logger.debug(f"End of candidates from {from_id}")
+                await session.pc.addIceCandidate(None)
                 return
 
             # Add ICE candidate
@@ -280,8 +336,23 @@ class AgentCore:
             # Set up ICE candidate handler
             def on_ice_candidate(candidate):
                 asyncio.create_task(self._send_candidate(peer_id, candidate))
+                if candidate is not None:
+                    self._log_ice_candidate(peer_id, candidate)
 
             session.pc.on("icecandidate", on_ice_candidate)
+
+            # Send end-of-candidates when gathering completes
+            def on_ice_gathering_state_change():
+                if session.pc.iceGatheringState == "complete":
+                    asyncio.create_task(self._send_candidate(peer_id, None))
+
+            session.pc.on("icegatheringstatechange", on_ice_gathering_state_change)
+
+            # ICE connection state handler
+            def on_ice_connection_state_change():
+                asyncio.create_task(self._on_ice_connection_state_change(peer_id))
+
+            session.pc.on("iceconnectionstatechange", on_ice_connection_state_change)
 
             # Set up connection state handler
             def on_connection_state_change():
@@ -339,11 +410,35 @@ class AgentCore:
 
         pc.on("connectionstatechange", on_connection_state_change)
 
+        # Set up ICE events
+        def on_ice_candidate(candidate):
+            asyncio.create_task(self._send_candidate(peer_id, candidate))
+            if candidate is not None:
+                self._log_ice_candidate(peer_id, candidate)
+
+        pc.on("icecandidate", on_ice_candidate)
+
+        def on_ice_gathering_state_change():
+            if pc.iceGatheringState == "complete":
+                asyncio.create_task(self._send_candidate(peer_id, None))
+
+        pc.on("icegatheringstatechange", on_ice_gathering_state_change)
+
+        def on_ice_connection_state_change():
+            asyncio.create_task(self._on_ice_connection_state_change(peer_id))
+
+        pc.on("iceconnectionstatechange", on_ice_connection_state_change)
+
         logger.info(f"Created peer session for {peer_id}")
 
     async def _send_candidate(self, peer_id: str, candidate: RTCIceCandidate) -> None:
         """Send ICE candidate to peer."""
         try:
+
+            if candidate is None:
+                logger.info("ICE complete")
+                return
+
             candidate_data = {
                 "candidate": candidate.candidate,
                 "sdpMid": candidate.sdpMid,
