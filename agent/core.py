@@ -13,6 +13,7 @@ from aiortc import (
     RTCSessionDescription,
 )
 from aiortc.exceptions import InvalidStateError
+from aiortc.sdp import candidate_from_sdp
 
 from .config import AgentSettings, create_rtc_configuration
 from .signaling import SignalingClient, MessageType
@@ -268,7 +269,7 @@ class AgentCore:
     async def _handle_candidate(self, message: Dict[str, any]) -> None:
         """Handle incoming ICE candidate message."""
         from_id = message["from"]
-        candidate_data = message["candidate"]
+        cand_sdp = message.get("candidate")
 
         logger.debug(f"Received ICE candidate from {from_id}")
 
@@ -278,25 +279,34 @@ class AgentCore:
 
         session = self.peer_sessions[from_id]
 
+        # If no candidate payload, treat as end-of-candidates from remote
+        if cand_sdp is None:
+            logger.info(f"{from_id}: remote ICE gathering complete")
+            return
+
         try:
-            # Handle end-of-candidates: must signal to aiortc
-            if candidate_data is None:
-                logger.debug(f"End of candidates from {from_id}")
-                await session.pc.addIceCandidate(None)
+            # Support both legacy dict format and string SDP format
+            if isinstance(cand_sdp, dict):
+                cand_str = cand_sdp.get("candidate")
+                sdp_mid = cand_sdp.get("sdpMid")
+                sdp_mline_index = cand_sdp.get("sdpMLineIndex")
+            else:
+                cand_str = cand_sdp
+                sdp_mid = message.get("sdpMid")
+                sdp_mline_index = message.get("sdpMLineIndex")
+
+            if not cand_str:
+                logger.warning(f"{from_id}: received empty candidate string")
                 return
 
-            # Add ICE candidate
-            candidate = RTCIceCandidate(
-                candidate=candidate_data["candidate"],
-                sdpMid=candidate_data.get("sdpMid"),
-                sdpMLineIndex=candidate_data.get("sdpMLineIndex"),
-            )
-            await session.pc.addIceCandidate(candidate)
+            cand = candidate_from_sdp(cand_str)
+            cand.sdpMid = sdp_mid
+            cand.sdpMLineIndex = sdp_mline_index
 
-            logger.debug(f"Added ICE candidate from {from_id}")
-
+            await session.pc.addIceCandidate(cand)
+            logger.info(f"Applied candidate from {from_id}: {cand_str}")
         except Exception as e:
-            logger.error(f"Error handling candidate from {from_id}: {e}")
+            logger.error(f"Failed to apply candidate from {from_id}: {cand_sdp} ({e})")
 
     async def _handle_bye(self, message: Dict[str, any]) -> None:
         """Handle connection termination message."""
@@ -434,29 +444,31 @@ class AgentCore:
     async def _send_candidate(self, peer_id: str, candidate: RTCIceCandidate) -> None:
         """Send ICE candidate to peer."""
         try:
-
             if candidate is None:
-                # Signal end-of-candidates
-                candidate_data = None
-            else:
-                candidate_data = {
-                    "candidate": candidate.candidate,
-                    "sdpMid": candidate.sdpMid,
-                    "sdpMLineIndex": candidate.sdpMLineIndex,
+                logger.info(f"{peer_id}: ICE gathering complete")
+                candidate_msg = {
+                    "type": MessageType.CANDIDATE,
+                    "from": self.settings.agent_id,
+                    "to": peer_id,
+                    "candidate": None,
                 }
+                await self.signaling.send(candidate_msg)
+                return
+
+            cand_sdp = getattr(candidate, "to_sdp", None)
+            cand_sdp = cand_sdp() if callable(cand_sdp) else candidate.candidate
 
             candidate_msg = {
                 "type": MessageType.CANDIDATE,
                 "from": self.settings.agent_id,
                 "to": peer_id,
-                "candidate": candidate_data,
+                "candidate": cand_sdp,
+                "sdpMid": candidate.sdpMid,
+                "sdpMLineIndex": candidate.sdpMLineIndex,
             }
 
             await self.signaling.send(candidate_msg)
-            if candidate is None:
-                logger.debug(f"Sent end-of-candidates to {peer_id}")
-            else:
-                logger.debug(f"Sent ICE candidate to {peer_id}")
+            logger.info(f"Sent candidate to {peer_id}: {cand_sdp}")
 
         except Exception as e:
             logger.error(f"Error sending candidate to {peer_id}: {e}")
@@ -494,7 +506,7 @@ class AgentCore:
         except Exception as e:
             logger.error(f"Error cleaning up session for {peer_id}: {e}")
         finally:
-            del self.peer_sessions[peer_id]
+            self.peer_sessions.pop(peer_id, None)
             logger.info(f"Cleaned up session for {peer_id}")
 
     def get_channel(self, peer_id: Optional[str] = None) -> Optional[RTCDataChannel]:
