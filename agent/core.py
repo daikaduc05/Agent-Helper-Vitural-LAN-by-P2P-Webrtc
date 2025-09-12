@@ -3,6 +3,8 @@
 
 import asyncio
 import logging
+
+logging.basicConfig(level=logging.DEBUG)
 from typing import Dict, Optional, Set
 
 from aiortc import (
@@ -101,16 +103,36 @@ class AgentCore:
 
     def _log_ice_candidate(self, peer_id: str, candidate: RTCIceCandidate) -> None:
         """Log the ICE candidate type (host/srflx/relay/prflx)."""
-        ctype = self._parse_candidate_type(candidate.candidate or "")
-        if ctype:
-            logger.info(f"Peer {peer_id} gathered ICE candidate type: {ctype}")
-        else:
-            logger.info(f"Peer {peer_id} gathered ICE candidate (type unknown)")
+        try:
+            cand_sdp = candidate.candidate or ""
+            ctype = self._parse_candidate_type(cand_sdp)
+
+            if ctype:
+                logger.info(
+                    f"[ICE_CANDIDATE_GATHERED] {peer_id}: ICE candidate type: {ctype}"
+                )
+                logger.debug(f"[ICE_CANDIDATE_GATHERED] {peer_id}: SDP={cand_sdp}")
+                logger.debug(
+                    f"[ICE_CANDIDATE_GATHERED] {peer_id}: sdpMid={candidate.sdpMid}, sdpMLineIndex={candidate.sdpMLineIndex}"
+                )
+            else:
+                logger.warning(
+                    f"[ICE_CANDIDATE_GATHERED] {peer_id}: ICE candidate type unknown"
+                )
+                logger.debug(f"[ICE_CANDIDATE_GATHERED] {peer_id}: SDP={cand_sdp}")
+        except Exception as e:
+            logger.error(
+                f"[ICE_CANDIDATE_GATHERED_ERROR] {peer_id}: Error logging candidate: {e}"
+            )
+            logger.debug(
+                f"[ICE_CANDIDATE_GATHERED_ERROR] {peer_id}: Candidate object: {candidate}"
+            )
 
     def _log_selected_ice_pair(self, peer_id: str) -> None:
         """Log the selected ICE candidate pair types when available."""
         session = self.peer_sessions.get(peer_id)
         if not session:
+            logger.warning(f"[ICE_PAIR_SELECTED] {peer_id}: No session found")
             return
         try:
             # For data channels, go through SCTP -> DTLS -> ICE
@@ -124,22 +146,56 @@ class AgentCore:
                 if pair and pair.local and pair.remote:
                     local_type = getattr(pair.local, "type", None)
                     remote_type = getattr(pair.remote, "type", None)
+                    local_candidate = getattr(pair.local, "candidate", None)
+                    remote_candidate = getattr(pair.remote, "candidate", None)
+
                     logger.info(
-                        f"Peer {peer_id} selected ICE pair: local={local_type}, remote={remote_type}"
+                        f"[ICE_PAIR_SELECTED] {peer_id}: Selected ICE pair - local={local_type}, remote={remote_type}"
+                    )
+                    logger.debug(
+                        f"[ICE_PAIR_SELECTED] {peer_id}: Local candidate: {local_candidate}"
+                    )
+                    logger.debug(
+                        f"[ICE_PAIR_SELECTED] {peer_id}: Remote candidate: {remote_candidate}"
                     )
                     return
+                else:
+                    logger.warning(
+                        f"[ICE_PAIR_SELECTED] {peer_id}: No candidate pair selected"
+                    )
+            else:
+                logger.debug(
+                    f"[ICE_PAIR_SELECTED] {peer_id}: ICE transport not available"
+                )
         except Exception as e:
-            logger.debug(f"Peer {peer_id} could not get selected ICE pair: {e}")
+            logger.debug(
+                f"[ICE_PAIR_SELECTED_ERROR] {peer_id}: Could not get selected ICE pair: {e}"
+            )
 
     async def _on_ice_connection_state_change(self, peer_id: str) -> None:
         """Handle ICE connection state changes and log selected pair."""
         session = self.peer_sessions.get(peer_id)
         if not session:
+            logger.warning(f"[ICE_CONNECTION_STATE] {peer_id}: No session found")
             return
         state = session.pc.iceConnectionState
-        logger.info(f"Peer {peer_id} ICE connection state: {state}")
+        logger.info(
+            f"[ICE_CONNECTION_STATE] {peer_id}: ICE connection state changed to: {state}"
+        )
+
         if state in ["connected", "completed"]:
+            logger.info(
+                f"[ICE_CONNECTION_SUCCESS] {peer_id}: ICE connection established"
+            )
             self._log_selected_ice_pair(peer_id)
+        elif state == "failed":
+            logger.error(f"[ICE_CONNECTION_FAILED] {peer_id}: ICE connection failed")
+        elif state == "disconnected":
+            logger.warning(
+                f"[ICE_CONNECTION_DISCONNECTED] {peer_id}: ICE connection disconnected"
+            )
+        elif state == "closed":
+            logger.info(f"[ICE_CONNECTION_CLOSED] {peer_id}: ICE connection closed")
 
     async def start(self) -> None:
         """Start agent core and begin processing signaling messages."""
@@ -344,7 +400,8 @@ class AgentCore:
             session.transport.attach_channel(data_channel)
 
             # Set up ICE candidate handler
-            def on_ice_candidate(candidate):
+            def on_ice_candidate(event):
+                candidate = event.candidate
                 asyncio.create_task(self._send_candidate(peer_id, candidate))
                 if candidate is not None:
                     self._log_ice_candidate(peer_id, candidate)
@@ -353,6 +410,9 @@ class AgentCore:
 
             # Send end-of-candidates when gathering completes
             def on_ice_gathering_state_change():
+                logger.info(
+                    f"{peer_id}: ICE gathering state changed → {session.pc.iceGatheringState}"
+                )
                 if session.pc.iceGatheringState == "complete":
                     asyncio.create_task(self._send_candidate(peer_id, None))
 
@@ -396,7 +456,9 @@ class AgentCore:
 
         # Create peer connection
         pc = RTCPeerConnection(self.rtc_config)
-        logger.info(f"Created RTCPeerConnection with config: {self.rtc_config.iceServers}")
+        logger.info(
+            f"Created RTCPeerConnection with config: {self.rtc_config.iceServers}"
+        )
         # Create transport
         transport = create_transport(self.settings.mode)
 
@@ -421,7 +483,8 @@ class AgentCore:
         pc.on("connectionstatechange", on_connection_state_change)
 
         # Set up ICE events
-        def on_ice_candidate(candidate):
+        def on_ice_candidate(event):
+            candidate = event.candidate
             asyncio.create_task(self._send_candidate(peer_id, candidate))
             if candidate is not None:
                 self._log_ice_candidate(peer_id, candidate)
@@ -429,6 +492,9 @@ class AgentCore:
         pc.on("icecandidate", on_ice_candidate)
 
         def on_ice_gathering_state_change():
+            logger.info(
+                f"{peer_id}: ICE gathering state changed → {session.pc.iceGatheringState}"
+            )
             if pc.iceGatheringState == "complete":
                 asyncio.create_task(self._send_candidate(peer_id, None))
 
@@ -441,12 +507,15 @@ class AgentCore:
 
         logger.info(f"Created peer session for {peer_id}")
 
-    async def _send_candidate(self, peer_id: str, candidate: RTCIceCandidate) -> None:
+    async def _send_candidate(
+        self, peer_id: str, candidate: Optional[RTCIceCandidate]
+    ) -> None:
         """Send ICE candidate to peer."""
         try:
-            logger.info(f"[SEND_CANDIDATE] peer={peer_id}, candidate obj={candidate!r}")
             if candidate is None:
-                logger.info(f"{peer_id}: ICE gathering complete")
+                logger.info(
+                    f"[END_OF_CANDIDATES] {peer_id}: ICE gathering complete - sending end-of-candidates signal"
+                )
                 candidate_msg = {
                     "type": MessageType.CANDIDATE,
                     "from": self.settings.agent_id,
@@ -454,14 +523,29 @@ class AgentCore:
                     "candidate": None,
                 }
                 await self.signaling.send(candidate_msg)
+                logger.info(
+                    f"[END_OF_CANDIDATES] {peer_id}: End-of-candidates signal sent successfully"
+                )
                 return
 
+            # Validate candidate object
             if not hasattr(candidate, "to_sdp"):
-                logger.error(f"{peer_id}: candidate missing to_sdp(), got {candidate}")
+                logger.error(
+                    f"[SEND_CANDIDATE_ERROR] {peer_id}: candidate missing to_sdp() method, got {type(candidate)}: {candidate}"
+                )
                 return
 
+            # Extract candidate information
             cand_sdp = candidate.to_sdp()
-            logger.info(f"[SEND_CANDIDATE] peer={peer_id}, SDP={cand_sdp}")
+            candidate_type = self._parse_candidate_type(cand_sdp)
+
+            logger.info(
+                f"[SEND_CANDIDATE] {peer_id}: Sending ICE candidate (type: {candidate_type})"
+            )
+            logger.debug(f"[SEND_CANDIDATE] {peer_id}: SDP={cand_sdp}")
+            logger.debug(
+                f"[SEND_CANDIDATE] {peer_id}: sdpMid={candidate.sdpMid}, sdpMLineIndex={candidate.sdpMLineIndex}"
+            )
 
             candidate_msg = {
                 "type": MessageType.CANDIDATE,
@@ -473,10 +557,17 @@ class AgentCore:
             }
 
             await self.signaling.send(candidate_msg)
-            logger.info(f"Sent candidate to {peer_id}: {cand_sdp}")
+            logger.info(
+                f"[SEND_CANDIDATE_SUCCESS] {peer_id}: ICE candidate sent successfully (type: {candidate_type})"
+            )
 
         except Exception as e:
-            logger.error(f"Error sending candidate to {peer_id}: {e}")
+            logger.error(
+                f"[SEND_CANDIDATE_ERROR] {peer_id}: Error sending candidate: {e}"
+            )
+            logger.debug(
+                f"[SEND_CANDIDATE_ERROR] {peer_id}: Candidate object: {candidate}"
+            )
 
     async def _on_connection_state_change(self, peer_id: str) -> None:
         """Handle peer connection state change."""
