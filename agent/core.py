@@ -455,8 +455,11 @@ class AgentCore:
                 await self.signaling.send(candidate_msg)
                 return
 
-            cand_sdp = getattr(candidate, "to_sdp", None)
-            cand_sdp = cand_sdp() if callable(cand_sdp) else candidate.candidate
+            if not hasattr(candidate, "to_sdp"):
+                logger.error(f"{peer_id}: candidate missing to_sdp(), got {candidate}")
+                return
+
+            cand_sdp = candidate.to_sdp()
 
             candidate_msg = {
                 "type": MessageType.CANDIDATE,
