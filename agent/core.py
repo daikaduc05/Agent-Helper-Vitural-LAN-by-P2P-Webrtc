@@ -436,14 +436,14 @@ class AgentCore:
         try:
 
             if candidate is None:
-                logger.info("ICE complete")
-                return
-
-            candidate_data = {
-                "candidate": candidate.candidate,
-                "sdpMid": candidate.sdpMid,
-                "sdpMLineIndex": candidate.sdpMLineIndex,
-            }
+                # Signal end-of-candidates
+                candidate_data = None
+            else:
+                candidate_data = {
+                    "candidate": candidate.candidate,
+                    "sdpMid": candidate.sdpMid,
+                    "sdpMLineIndex": candidate.sdpMLineIndex,
+                }
 
             candidate_msg = {
                 "type": MessageType.CANDIDATE,
@@ -453,7 +453,10 @@ class AgentCore:
             }
 
             await self.signaling.send(candidate_msg)
-            logger.debug(f"Sent ICE candidate to {peer_id}")
+            if candidate is None:
+                logger.debug(f"Sent end-of-candidates to {peer_id}")
+            else:
+                logger.debug(f"Sent ICE candidate to {peer_id}")
 
         except Exception as e:
             logger.error(f"Error sending candidate to {peer_id}: {e}")
