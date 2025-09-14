@@ -25,6 +25,38 @@ from .tun import TunDevice, create_tun
 logger = logging.getLogger(__name__)
 
 
+async def wait_for_ice_gathering(pc: RTCPeerConnection, timeout: float = 5.0) -> None:
+    """
+    Wait for ICE gathering to complete or timeout.
+
+    Args:
+        pc: RTCPeerConnection instance
+        timeout: Maximum time to wait in seconds
+    """
+    if pc.iceGatheringState == "complete":
+        logger.debug("ICE gathering already complete")
+        return
+
+    logger.debug(f"Waiting for ICE gathering to complete (timeout: {timeout}s)")
+    done = asyncio.Event()
+
+    def on_state_change():
+        logger.debug(f"ICE gathering state: {pc.iceGatheringState}")
+        if pc.iceGatheringState == "complete":
+            done.set()
+
+    pc.on("icegatheringstatechange", on_state_change)
+
+    try:
+        await asyncio.wait_for(done.wait(), timeout=timeout)
+        logger.debug("ICE gathering completed successfully")
+    except asyncio.TimeoutError:
+        logger.warning(f"ICE gathering timeout after {timeout}s, proceeding anyway")
+    finally:
+        # Remove the event listener
+        pc.remove_listener("icegatheringstatechange", on_state_change)
+
+
 class PeerSession:
     """Represents a peer connection session."""
 
@@ -283,18 +315,23 @@ class AgentCore:
 
             # Create answer
             answer = await session.pc.createAnswer()
+
+            # Wait for ICE gathering to complete (non-trickle)
+            await wait_for_ice_gathering(session.pc, timeout=5.0)
+
+            # Set local description with complete SDP (including all ICE candidates)
             await session.pc.setLocalDescription(answer)
 
-            # Send answer
+            # Send answer with complete SDP
             answer_msg = {
                 "type": MessageType.ANSWER,
                 "from": self.settings.agent_id,
                 "to": from_id,
-                "sdp": answer.sdp,
+                "sdp": session.pc.localDescription.sdp,
             }
             await self.signaling.send(answer_msg)
 
-            logger.info(f"Sent answer to {from_id}")
+            logger.info(f"Sent complete answer to {from_id} (non-trickle)")
 
         except Exception as e:
             logger.error(f"Error handling offer from {from_id}: {e}")
@@ -325,11 +362,11 @@ class AgentCore:
             await self._cleanup_session(from_id)
 
     async def _handle_candidate(self, message: Dict[str, any]) -> None:
-        """Handle incoming ICE candidate message."""
+        """Handle incoming ICE candidate message (non-trickle mode - candidates should be in SDP)."""
         from_id = message["from"]
         cand_sdp = message.get("candidate")
 
-        logger.debug(f"Received ICE candidate from {from_id}")
+        logger.debug(f"Received ICE candidate from {from_id} (non-trickle mode)")
 
         if from_id not in self.peer_sessions:
             logger.warning(f"Received candidate from unknown peer: {from_id}")
@@ -339,9 +376,16 @@ class AgentCore:
 
         # If no candidate payload, treat as end-of-candidates from remote
         if cand_sdp is None:
-            logger.info(f"{from_id}: remote ICE gathering complete")
+            logger.debug(f"{from_id}: remote ICE gathering complete")
             return
 
+        # In non-trickle mode, individual candidates should not be sent
+        # They should be included in the SDP. Log this as a warning.
+        logger.warning(
+            f"{from_id}: Received individual candidate in non-trickle mode - this should be in SDP"
+        )
+
+        # Still process the candidate for backward compatibility
         try:
             # Support both legacy dict format and string SDP format
             if isinstance(cand_sdp, dict):
@@ -362,7 +406,7 @@ class AgentCore:
             cand.sdpMLineIndex = sdp_mline_index
 
             await session.pc.addIceCandidate(cand)
-            logger.info(f"Applied candidate from {from_id}: {cand_str}")
+            logger.debug(f"Applied candidate from {from_id}: {cand_str}")
         except Exception as e:
             logger.error(f"Failed to apply candidate from {from_id}: {cand_sdp} ({e})")
 
@@ -401,29 +445,19 @@ class AgentCore:
             session.data_channel = data_channel
             session.transport.attach_channel(data_channel)
 
-            # Set up ICE candidate handler
+            # Set up ICE candidate handler (non-trickle: only log, don't send)
             async def on_icecandidate(event):
                 candidate = event.candidate
                 if candidate is None:
-                    logger.info(f"[END_OF_CANDIDATES] peer={peer_id}")
-                    await self._send_candidate(peer_id, None)
+                    logger.debug(f"[END_OF_CANDIDATES] peer={peer_id}")
                     return
 
                 cand_sdp = candidate.to_sdp()
-                logger.info(f"[NEW_CANDIDATE] peer={peer_id}, SDP={cand_sdp}")
-                await self._send_candidate(peer_id, candidate)
+                logger.debug(
+                    f"[ICE_CANDIDATE] peer={peer_id}, type={self._parse_candidate_type(cand_sdp)}"
+                )
 
             session.pc.on("icecandidate", on_icecandidate)
-
-            # Send end-of-candidates when gathering completes
-            def on_ice_gathering_state_change():
-                logger.info(
-                    f"{peer_id}: ICE gathering state changed → {session.pc.iceGatheringState}"
-                )
-                if session.pc.iceGatheringState == "complete":
-                    asyncio.create_task(self._send_candidate(peer_id, None))
-
-            session.pc.on("icegatheringstatechange", on_ice_gathering_state_change)
 
             # ICE connection state handler
             def on_ice_connection_state_change():
@@ -439,18 +473,23 @@ class AgentCore:
 
             # Create offer
             offer = await session.pc.createOffer()
+
+            # Wait for ICE gathering to complete (non-trickle)
+            await wait_for_ice_gathering(session.pc, timeout=5.0)
+
+            # Set local description with complete SDP (including all ICE candidates)
             await session.pc.setLocalDescription(offer)
 
-            # Send offer
+            # Send offer with complete SDP
             offer_msg = {
                 "type": MessageType.OFFER,
                 "from": self.settings.agent_id,
                 "to": peer_id,
-                "sdp": offer.sdp,
+                "sdp": session.pc.localDescription.sdp,
             }
             await self.signaling.send(offer_msg)
 
-            logger.info(f"Sent offer to {peer_id}")
+            logger.info(f"Sent complete offer to {peer_id} (non-trickle)")
 
         except Exception as e:
             logger.error(f"Error connecting to {peer_id}: {e}")
@@ -489,26 +528,24 @@ class AgentCore:
 
         pc.on("connectionstatechange", on_connection_state_change)
 
-        # Set up ICE events
+        # Set up ICE events (non-trickle: only log, don't send)
         async def on_icecandidate(event):
             candidate = event.candidate
             if candidate is None:
-                logger.info(f"[END_OF_CANDIDATES] peer={peer_id}")
-                await self._send_candidate(peer_id, None)
+                logger.debug(f"[END_OF_CANDIDATES] peer={peer_id}")
                 return
 
             cand_sdp = candidate.to_sdp()
-            logger.info(f"[NEW_CANDIDATE] peer={peer_id}, SDP={cand_sdp}")
-            await self._send_candidate(peer_id, candidate)
+            logger.debug(
+                f"[ICE_CANDIDATE] peer={peer_id}, type={self._parse_candidate_type(cand_sdp)}"
+            )
 
         pc.on("icecandidate", on_icecandidate)
 
         def on_ice_gathering_state_change():
-            logger.info(
+            logger.debug(
                 f"{peer_id}: ICE gathering state changed → {session.pc.iceGatheringState}"
             )
-            if pc.iceGatheringState == "complete":
-                asyncio.create_task(self._send_candidate(peer_id, None))
 
         pc.on("icegatheringstatechange", on_ice_gathering_state_change)
 
@@ -522,51 +559,11 @@ class AgentCore:
     async def _send_candidate(
         self, peer_id: str, candidate: Optional[RTCIceCandidate]
     ) -> None:
-        """Send ICE candidate to peer."""
-        try:
-            if candidate is None:
-                # Send end-of-candidates signal
-                candidate_msg = {
-                    "type": MessageType.CANDIDATE,
-                    "from": self.settings.agent_id,
-                    "to": peer_id,
-                    "candidate": None,
-                }
-                await self.signaling.send(candidate_msg)
-                logger.info(
-                    f"[END_OF_CANDIDATES] peer={peer_id} - signal sent successfully"
-                )
-                return
-
-            # Validate candidate object
-            if not hasattr(candidate, "to_sdp"):
-                logger.error(
-                    f"[SEND_CANDIDATE_ERROR] {peer_id}: candidate missing to_sdp() method, got {type(candidate)}: {candidate}"
-                )
-                return
-
-            # Send ICE candidate
-            candidate_msg = {
-                "type": MessageType.CANDIDATE,
-                "from": self.settings.agent_id,
-                "to": peer_id,
-                "candidate": candidate.to_sdp(),
-                "sdpMid": candidate.sdpMid,
-                "sdpMLineIndex": candidate.sdpMLineIndex,
-            }
-
-            await self.signaling.send(candidate_msg)
-            logger.info(
-                f"[SEND_CANDIDATE_SUCCESS] peer={peer_id} - candidate sent successfully"
-            )
-
-        except Exception as e:
-            logger.error(
-                f"[SEND_CANDIDATE_ERROR] {peer_id}: Error sending candidate: {e}"
-            )
-            logger.debug(
-                f"[SEND_CANDIDATE_ERROR] {peer_id}: Candidate object: {candidate}"
-            )
+        """Send ICE candidate to peer (DEPRECATED - non-trickle mode)."""
+        logger.warning(
+            f"[DEPRECATED] _send_candidate called for {peer_id} - non-trickle mode doesn't send individual candidates"
+        )
+        # This method is kept for compatibility but should not be called in non-trickle mode
 
     async def _on_connection_state_change(self, peer_id: str) -> None:
         """Handle peer connection state change."""

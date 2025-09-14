@@ -1,0 +1,39 @@
+# ICE Candidates Test Configuration (Non-Trickle ICE)
+# Copy this file to .env and update with your actual values
+
+# Agent configuration
+AGENT_ID=ice-tester
+
+# ICE/TURN Server Configuration
+# Single ICE server
+ICE_URL=turn:your-turn-server.com:3478
+ICE_USERNAME=your-username
+ICE_CREDENTIAL=your-password
+
+# Multiple ICE servers (comma-separated)
+# ICE_URLS=turn:turn1.example.com:3478,turn:turn2.example.com:3478,stun:stun.l.google.com:19302
+
+# Alternative TURN server configurations:
+# ICE_URL=turns:your-turn-server.com:5349
+# ICE_URL=turn:your-turn-server.com:3478?transport=tcp
+# ICE_URL=turn:your-turn-server.com:3478?transport=udp
+
+# Example configurations for popular TURN services:
+
+# Xirsys TURN service
+# ICE_URL=turn:global.xirsys.com:80
+# ICE_USERNAME=your-xirsys-username
+# ICE_CREDENTIAL=your-xirsys-credential
+
+# Twilio STUN/TURN service
+# ICE_URLS=stun:global.stun.twilio.com:3478,turn:global.turn.twilio.com:3478
+# ICE_USERNAME=your-twilio-username
+# ICE_CREDENTIAL=your-twilio-credential
+
+# Google STUN servers (free, no auth required)
+# ICE_URLS=stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302,stun:stun2.l.google.com:19302
+
+# Coturn TURN server (self-hosted)
+# ICE_URL=turn:your-domain.com:3478
+# ICE_USERNAME=your-turn-username
+# ICE_CREDENTIAL=your-turn-password
