@@ -4,7 +4,7 @@
 import asyncio
 import logging
 
-#logging.basicConfig(level=logging.DEBUG)
+# logging.basicConfig(level=logging.DEBUG)
 from typing import Dict, Optional, Set
 
 from aiortc import (
@@ -291,9 +291,14 @@ class AgentCore:
             elif msg_type == MessageType.ERROR:
                 await self._handle_error(message)
             else:
-                logger.warning(f"Unknown message type: {msg_type}")
+                logger.warning(
+                    f"Unknown message type: {msg_type} (expected one of: {list(MessageType)})"
+                )
         except Exception as e:
             logger.error(f"Error handling {msg_type} message: {e}")
+            import traceback
+
+            logger.error(f"Traceback: {traceback.format_exc()}")
 
     async def _handle_offer(self, message: Dict[str, any]) -> None:
         """Handle incoming offer message."""
@@ -309,7 +314,7 @@ class AgentCore:
         session = self.peer_sessions[from_id]
 
         try:
-            # Set remote description
+            # Set remote description (contains all ICE candidates in non-trickle mode)
             offer = RTCSessionDescription(sdp=sdp, type="offer")
             await session.pc.setRemoteDescription(offer)
 
