@@ -61,37 +61,36 @@ async def chat_offerer(peer_id: str):
 
             await asyncio.sleep(0.1)
 
-        # Get transport and set up message handler
+        # Get transport and set up custom message handler
         transport = session.transport
 
         def on_message(data: bytes):
             try:
                 text = data.decode("utf-8")
-                print(f"< {text}")
+                print(f"> {text}")
             except UnicodeDecodeError:
-                print(f"< [binary data: {len(data)} bytes]")
+                print(f"> [binary data: {len(data)} bytes]")
 
+        # Override default handler with custom one
         transport.on_message(on_message)
 
-        # Send some example messages
-        messages = [
-            "Hello from the offerer!",
-            "This is a test message.",
-            "WebRTC data channels are working!",
-            "Goodbye!",
-        ]
+        print(f"Chat session with {peer_id} started.")
+        print("Type messages and press Enter. Type 'quit' to exit.")
 
-        print(f"Chat session with {peer_id} established.")
-        print("Sending example messages...")
+        # Interactive chat loop
+        loop = asyncio.get_event_loop()
+        while True:
+            try:
+                line = await loop.run_in_executor(None, sys.stdin.readline)
+                if not line or line.strip() == "quit":
+                    break
 
-        for i, message in enumerate(messages):
-            print(f"> {message}")
-            transport.send_text(message)
-            await asyncio.sleep(1.0)  # Wait between messages
+                message = line.strip()
+                if message:
+                    transport.send_text(message)
 
-        # Wait a bit for responses
-        print("Waiting for responses...")
-        await asyncio.sleep(5.0)
+            except KeyboardInterrupt:
+                break
 
         logger.info("Chat offerer completed")
         return 0

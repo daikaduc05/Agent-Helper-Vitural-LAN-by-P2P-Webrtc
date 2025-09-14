@@ -101,20 +101,20 @@ async def handle_chat_session(core: AgentCore, peer_id: str):
         nonlocal message_count
         try:
             text = data.decode("utf-8")
-            print(f"< {text}")
+            print(f"> {text}")
             message_count += 1
 
             # Send a response
             response = f"Response {message_count}: Received '{text}'"
-            print(f"> {response}")
             transport.send_text(response)
 
         except UnicodeDecodeError:
-            print(f"< [binary data: {len(data)} bytes]")
+            print(f"> [binary data: {len(data)} bytes]")
 
+    # Override default handler with custom one
     transport.on_message(on_message)
 
-    print(f"Chat session with {peer_id} established.")
+    print(f"Chat session with {peer_id} started.")
     print("Listening for messages and sending responses...")
     print("Press Ctrl+C to exit.")
 

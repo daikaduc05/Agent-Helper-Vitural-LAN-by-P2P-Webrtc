@@ -63,6 +63,19 @@ class Transport(ABC):
         self._message_callback = callback
         logger.debug("Message callback registered")
 
+    def set_default_message_handler(self) -> None:
+        """Set up default message handler that logs received messages."""
+
+        def handle_message(data: bytes):
+            try:
+                text = data.decode("utf-8", errors="ignore")
+                logger.info(f"[MESSAGE_RECEIVED] {text}")
+            except Exception as e:
+                logger.error(f"Failed to decode message: {e}")
+
+        self.on_message(handle_message)
+        logger.debug("Default message handler registered")
+
     def _on_channel_message(self, message: Union[str, bytes]) -> None:
         """Handle incoming channel message."""
         try:
@@ -74,7 +87,7 @@ class Transport(ABC):
             if self._message_callback:
                 self._message_callback(data)
             else:
-                logger.warning("No message callback registered")
+                logger.debug("Message received but no callback registered")
         except Exception as e:
             logger.error(f"Error handling channel message: {e}")
 
@@ -188,7 +201,7 @@ class ChatTransport(Transport):
         try:
             data = text.encode("utf-8")
             self._queue_message(data)
-            logger.debug(f"Queued text message: {len(data)} bytes")
+            logger.info(f"[MESSAGE_SENT] {text}")
         except UnicodeEncodeError as e:
             logger.error(f"Failed to encode text: {e}")
             raise TransportError(f"Failed to encode text: {e}")

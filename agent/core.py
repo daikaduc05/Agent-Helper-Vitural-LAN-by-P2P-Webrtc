@@ -512,6 +512,9 @@ class AgentCore:
         )
         # Create transport
         transport = create_transport(self.settings.mode)
+        
+        # Set up default message handler
+        transport.set_default_message_handler()
 
         # Create session
         session = PeerSession(peer_id, pc, transport)
