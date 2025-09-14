@@ -4,7 +4,7 @@
 import asyncio
 import logging
 
-logging.basicConfig(level=logging.DEBUG)
+#logging.basicConfig(level=logging.DEBUG)
 from typing import Dict, Optional, Set
 
 from aiortc import (
