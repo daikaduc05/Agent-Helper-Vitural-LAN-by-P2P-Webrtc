@@ -188,9 +188,10 @@ class Transport(ABC):
             loop = asyncio.get_event_loop()
             while not self._shutdown_event.is_set():
                 try:
-                    # Try to read from stdin with very short timeout
+                    # Use a simple approach that works better on Windows
+                    # Read from stdin in a separate thread with longer timeout
                     line = await asyncio.wait_for(
-                        loop.run_in_executor(None, sys.stdin.readline), timeout=0.1
+                        loop.run_in_executor(None, input), timeout=30.0
                     )
                     if not line:
                         continue
