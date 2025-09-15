@@ -197,7 +197,7 @@ class Transport(ABC):
                         continue
 
                     text = line.strip()
-                    logger.info(f"Read from stdin: '{text}'")
+                    # logger.info(f"Read from stdin: '{text}'")
                     if text.lower() == "quit":
                         logger.info("User requested quit")
                         self._shutdown_event.set()
@@ -208,7 +208,7 @@ class Transport(ABC):
                             logger.info("Using custom stdin handler")
                             self._stdin_handler(text)
                         else:
-                            logger.info("Using default send_text")
+                            # logger.info("Using default send_text")
                             self.send_text(text)
                             # print(f"me: {text}")
                             # logger.info(f"[MESSAGE_SENT] {text}")
