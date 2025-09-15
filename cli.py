@@ -300,39 +300,15 @@ async def _interactive_chat(
 
     transport = session.transport
 
-    # Set up message handler
-    def on_message(data: bytes):
-        try:
-            text = data.decode("utf-8")
-            print(f"< {text}")
-        except UnicodeDecodeError:
-            print(f"< [binary data: {len(data)} bytes]")
-
-    transport.on_message(on_message)
+    # Transport already has default message handler set up in core.py
+    # No need to override it, it will print received messages automatically
 
     print(f"Chat session with {peer_id} started. Type messages and press Enter.")
     print("Type 'quit' to exit.")
 
-    # Start stdin reader
-    async def stdin_reader():
-        loop = asyncio.get_event_loop()
-        while not shutdown_event.is_set():
-            try:
-                line = await loop.run_in_executor(None, sys.stdin.readline)
-                if not line or line.strip() == "quit":
-                    shutdown_event.set()
-                    break
-
-                text = line.strip()
-                if text:
-                    transport.send_text(text)
-                    print(f"> {text}")
-            except Exception as e:
-                logger.error(f"Error reading stdin: {e}")
-                break
-
-    # Run stdin reader
-    await stdin_reader()
+    # Transport already has stdin reader running from _on_channel_open
+    # Just wait for shutdown event
+    await shutdown_event.wait()
 
 
 async def _interactive_json(
