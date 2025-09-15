@@ -56,6 +56,12 @@ class Transport(ABC):
         self._channel.on("close", self._on_channel_close)
 
         logger.info(f"Attached channel: {channel.label}")
+        logger.info(f"Channel readyState: {channel.readyState}")
+
+        # If channel is already open, trigger the open event manually
+        if channel.readyState == "open":
+            logger.info("Channel already open, triggering open event manually")
+            self._on_channel_open()
 
     def on_message(self, callback: Callable[[bytes], None]) -> None:
         """
@@ -116,6 +122,7 @@ class Transport(ABC):
         logger.info("Sender and stdin reader started")
         # Test stdin reader by sending a test message
         asyncio.create_task(self._test_stdin_reader())
+        logger.info("_on_channel_open completed successfully")
 
     def _on_channel_close(self) -> None:
         """Handle channel close event."""
@@ -128,6 +135,8 @@ class Transport(ABC):
         if self._sender_task is None or self._sender_task.done():
             self._sender_task = asyncio.create_task(self._sender_loop())
             logger.info("Started message sender task")
+        else:
+            logger.info("Sender task already running")
 
     def _stop_sender(self) -> None:
         """Stop background sender task."""
@@ -140,6 +149,8 @@ class Transport(ABC):
         if self._stdin_reader_task is None or self._stdin_reader_task.done():
             self._stdin_reader_task = asyncio.create_task(self._stdin_reader_loop())
             logger.info("Started stdin reader task")
+        else:
+            logger.info("Stdin reader task already running")
 
     def _stop_stdin_reader(self) -> None:
         """Stop background stdin reader task."""
