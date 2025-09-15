@@ -61,36 +61,9 @@ async def chat_offerer(peer_id: str):
 
             await asyncio.sleep(0.1)
 
-        # Get transport and set up custom message handler
-        transport = session.transport
-
-        def on_message(data: bytes):
-            try:
-                text = data.decode("utf-8")
-                print(f"> {text}")
-            except UnicodeDecodeError:
-                print(f"> [binary data: {len(data)} bytes]")
-
-        # Override default handler with custom one
-        transport.on_message(on_message)
-
-        print(f"Chat session with {peer_id} started.")
-        print("Type messages and press Enter. Type 'quit' to exit.")
-
-        # Interactive chat loop
-        loop = asyncio.get_event_loop()
-        while True:
-            try:
-                line = await loop.run_in_executor(None, sys.stdin.readline)
-                if not line or line.strip() == "quit":
-                    break
-
-                message = line.strip()
-                if message:
-                    transport.send_text(message)
-
-            except KeyboardInterrupt:
-                break
+        # Wait for shutdown (handled by transport stdin reader)
+        logger.info("Chat session established. Transport will handle stdin/stdout.")
+        await core.wait_for_shutdown()
 
         logger.info("Chat offerer completed")
         return 0

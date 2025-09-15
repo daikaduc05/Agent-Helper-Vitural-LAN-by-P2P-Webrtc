@@ -4,6 +4,7 @@
 import asyncio
 import json
 import logging
+import sys
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, Optional, Union
 
@@ -32,7 +33,9 @@ class Transport(ABC):
         self._message_callback: Optional[Callable[[bytes], None]] = None
         self._outbox_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=max_queue_size)
         self._sender_task: Optional[asyncio.Task] = None
+        self._stdin_reader_task: Optional[asyncio.Task] = None
         self._max_queue_size = max_queue_size
+        self._shutdown_event = asyncio.Event()
 
         logger.debug(f"Transport initialized with max queue size: {max_queue_size}")
 
@@ -64,11 +67,12 @@ class Transport(ABC):
         logger.debug("Message callback registered")
 
     def set_default_message_handler(self) -> None:
-        """Set up default message handler that logs received messages."""
+        """Set up default message handler that logs received messages and prints to console."""
 
         def handle_message(data: bytes):
             try:
                 text = data.decode("utf-8", errors="ignore")
+                print(f"> {text}")  # Print to console
                 logger.info(f"[MESSAGE_RECEIVED] {text}")
             except Exception as e:
                 logger.error(f"Failed to decode message: {e}")
@@ -94,12 +98,15 @@ class Transport(ABC):
     def _on_channel_open(self) -> None:
         """Handle channel open event."""
         logger.info("Data channel opened")
+        print("Chat session started. Type 'quit' to exit.")
         self._start_sender()
+        self._start_stdin_reader()
 
     def _on_channel_close(self) -> None:
         """Handle channel close event."""
         logger.info("Data channel closed")
         self._stop_sender()
+        self._stop_stdin_reader()
 
     def _start_sender(self) -> None:
         """Start background task to send queued messages."""
@@ -113,10 +120,26 @@ class Transport(ABC):
             self._sender_task.cancel()
             logger.debug("Stopped message sender task")
 
+    def _start_stdin_reader(self) -> None:
+        """Start background task to read from stdin."""
+        if self._stdin_reader_task is None or self._stdin_reader_task.done():
+            self._stdin_reader_task = asyncio.create_task(self._stdin_reader_loop())
+            logger.debug("Started stdin reader task")
+
+    def _stop_stdin_reader(self) -> None:
+        """Stop background stdin reader task."""
+        if self._stdin_reader_task and not self._stdin_reader_task.done():
+            self._stdin_reader_task.cancel()
+            logger.debug("Stopped stdin reader task")
+
     async def _sender_loop(self) -> None:
         """Background task to send queued messages."""
         try:
-            while self._channel and self._channel.readyState == "open":
+            while (
+                self._channel
+                and self._channel.readyState == "open"
+                and not self._shutdown_event.is_set()
+            ):
                 try:
                     message = await asyncio.wait_for(
                         self._outbox_queue.get(), timeout=1.0
@@ -131,6 +154,36 @@ class Transport(ABC):
             logger.debug("Sender loop cancelled")
         except Exception as e:
             logger.error(f"Unexpected error in sender loop: {e}")
+
+    async def _stdin_reader_loop(self) -> None:
+        """Background task to read from stdin and send messages."""
+        try:
+            loop = asyncio.get_event_loop()
+            while not self._shutdown_event.is_set():
+                try:
+                    # Read from stdin in executor to avoid blocking
+                    line = await loop.run_in_executor(None, sys.stdin.readline)
+                    if not line:
+                        continue
+
+                    text = line.strip()
+                    if text.lower() == "quit":
+                        logger.info("User requested quit")
+                        self._shutdown_event.set()
+                        break
+
+                    if text:  # Only send non-empty messages
+                        self.send_text(text)
+                        print(f"me: {text}")
+                        logger.info(f"[MESSAGE_SENT] {text}")
+
+                except Exception as e:
+                    logger.error(f"Error reading from stdin: {e}")
+                    await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            logger.debug("Stdin reader loop cancelled")
+        except Exception as e:
+            logger.error(f"Unexpected error in stdin reader loop: {e}")
 
     async def _send_raw(self, data: bytes) -> None:
         """Send raw bytes over data channel."""
@@ -178,14 +231,21 @@ class Transport(ABC):
         """Close transport and cleanup resources."""
         logger.info("Closing transport")
 
+        self._shutdown_event.set()
         self._stop_sender()
+        self._stop_stdin_reader()
 
+        # Wait for tasks to complete
+        tasks = []
         if self._sender_task and not self._sender_task.done():
-            self._sender_task.cancel()
-            try:
-                await self._sender_task
-            except asyncio.CancelledError:
-                pass
+            tasks.append(self._sender_task)
+        if self._stdin_reader_task and not self._stdin_reader_task.done():
+            tasks.append(self._stdin_reader_task)
+
+        if tasks:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
         self._channel = None
         self._message_callback = None
@@ -201,7 +261,7 @@ class ChatTransport(Transport):
         try:
             data = text.encode("utf-8")
             self._queue_message(data)
-            logger.info(f"[MESSAGE_SENT] {text}")
+            # Note: [MESSAGE_SENT] logging is handled in _stdin_reader_loop
         except UnicodeEncodeError as e:
             logger.error(f"Failed to encode text: {e}")
             raise TransportError(f"Failed to encode text: {e}")
@@ -390,6 +450,7 @@ class TunTransport(Transport):
         """Close transport and cleanup TUN resources."""
         logger.info("Closing TUN transport")
 
+        self._shutdown_event.set()
         self._stop_tun_reader()
 
         if self._tun_reader_task and not self._tun_reader_task.done():

@@ -243,6 +243,10 @@ class AgentCore:
 
         logger.info("Agent core started")
 
+    async def wait_for_shutdown(self) -> None:
+        """Wait for shutdown signal (when all sessions are closed)."""
+        await self._shutdown_event.wait()
+
     async def _signaling_loop(self) -> None:
         """Background task to process incoming signaling messages."""
         try:
@@ -252,6 +256,8 @@ class AgentCore:
                     message = await asyncio.wait_for(self.signaling.recv(), timeout=1.0)
                     await self._handle_incoming(message)
                 except asyncio.TimeoutError:
+                    # Check if any transport has requested shutdown
+                    await self._check_transport_shutdown()
                     continue
                 except Exception as e:
                     logger.error(f"Error in signaling loop: {e}")
@@ -260,6 +266,20 @@ class AgentCore:
             logger.debug("Signaling loop cancelled")
         except Exception as e:
             logger.error(f"Unexpected error in signaling loop: {e}")
+
+    async def _check_transport_shutdown(self) -> None:
+        """Check if any transport has requested shutdown and handle it."""
+        for peer_id, session in list(self.peer_sessions.items()):
+            if (
+                hasattr(session.transport, "_shutdown_event")
+                and session.transport._shutdown_event.is_set()
+            ):
+                logger.info(f"Transport for {peer_id} requested shutdown")
+                await self._cleanup_session(peer_id)
+                # If this was the last session, shutdown the agent
+                if not self.peer_sessions:
+                    logger.info("All sessions closed, shutting down agent")
+                    self._shutdown_event.set()
 
     async def _handle_incoming(self, message: Dict[str, any]) -> None:
         """
@@ -512,7 +532,7 @@ class AgentCore:
         )
         # Create transport
         transport = create_transport(self.settings.mode)
-        
+
         # Set up default message handler
         transport.set_default_message_handler()
 

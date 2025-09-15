@@ -94,44 +94,9 @@ async def handle_chat_session(core: AgentCore, peer_id: str):
         logger.error(f"No session found for {peer_id}")
         return
 
-    transport = session.transport
-    message_count = 0
-
-    def on_message(data: bytes):
-        nonlocal message_count
-        try:
-            text = data.decode("utf-8")
-            print(f"> {text}")
-            message_count += 1
-
-            # Send a response
-            response = f"Response {message_count}: Received '{text}'"
-            transport.send_text(response)
-
-        except UnicodeDecodeError:
-            print(f"> [binary data: {len(data)} bytes]")
-
-    # Override default handler with custom one
-    transport.on_message(on_message)
-
-    print(f"Chat session with {peer_id} started.")
-    print("Listening for messages and sending responses...")
-    print("Press Ctrl+C to exit.")
-
-    # Wait for messages
-    try:
-        while True:
-            await asyncio.sleep(1.0)
-
-            # Check if connection is still alive
-            if not session.is_connected():
-                logger.info(f"Connection to {peer_id} lost")
-                break
-
-    except KeyboardInterrupt:
-        logger.info("Interrupted by user")
-    except Exception as e:
-        logger.error(f"Error in chat session: {e}")
+    # Wait for shutdown (handled by transport stdin reader)
+    logger.info("Chat session established. Transport will handle stdin/stdout.")
+    await core.wait_for_shutdown()
 
 
 def main():
