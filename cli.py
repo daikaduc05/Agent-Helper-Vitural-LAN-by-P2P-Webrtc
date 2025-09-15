@@ -176,8 +176,44 @@ def listen(ctx, timeout: int):
             logger.info(f"Listening for connections (agent: {settings.agent_id})")
             logger.info("Press Ctrl+C to stop")
 
-            # Wait for shutdown
-            await context.shutdown_event.wait()
+            # Wait for first connection and start interactive session
+            while not context.shutdown_event.is_set():
+                # Check if any peer is connected
+                sessions = core.get_all_sessions()
+                connected_peer = None
+                for peer_id, session in sessions.items():
+                    if session.is_connected():
+                        connected_peer = peer_id
+                        break
+
+                if connected_peer:
+                    logger.info(
+                        f"Peer {connected_peer} connected, starting interactive session"
+                    )
+                    # Start interactive session based on mode
+                    if settings.mode == "chat":
+                        await _interactive_chat(
+                            core, connected_peer, context.shutdown_event
+                        )
+                    elif settings.mode == "json":
+                        await _interactive_json(
+                            core, connected_peer, context.shutdown_event
+                        )
+                    elif settings.mode == "bytes":
+                        await _interactive_bytes(
+                            core, connected_peer, context.shutdown_event
+                        )
+                    elif settings.mode == "tun":
+                        await _interactive_tun(
+                            core, connected_peer, context.shutdown_event
+                        )
+                    else:
+                        logger.error(f"Unsupported mode: {settings.mode}")
+                        return 1
+                    break
+
+                # Wait a bit before checking again
+                await asyncio.sleep(0.1)
 
         except Exception as e:
             logger.error(f"Error in listen: {e}")
