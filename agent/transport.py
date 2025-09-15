@@ -90,7 +90,7 @@ class Transport(ABC):
             try:
                 text = data.decode("utf-8", errors="ignore")
                 print(f"> {text}")  # Print to console
-                logger.info(f"[MESSAGE_RECEIVED] {text}")
+                # logger.info(f"[MESSAGE_RECEIVED] {text}")
             except Exception as e:
                 logger.error(f"Failed to decode message: {e}")
 
@@ -210,8 +210,8 @@ class Transport(ABC):
                         else:
                             logger.info("Using default send_text")
                             self.send_text(text)
-                            print(f"me: {text}")
-                            logger.info(f"[MESSAGE_SENT] {text}")
+                            # print(f"me: {text}")
+                            # logger.info(f"[MESSAGE_SENT] {text}")
 
                 except asyncio.TimeoutError:
                     # Timeout is normal, continue loop
