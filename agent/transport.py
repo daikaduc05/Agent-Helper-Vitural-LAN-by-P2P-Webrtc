@@ -110,8 +110,12 @@ class Transport(ABC):
         """Handle channel open event."""
         logger.info("Data channel opened")
         print("Chat session started. Type 'quit' to exit.")
+        logger.info("Starting sender and stdin reader...")
         self._start_sender()
         self._start_stdin_reader()
+        logger.info("Sender and stdin reader started")
+        # Test stdin reader by sending a test message
+        asyncio.create_task(self._test_stdin_reader())
 
     def _on_channel_close(self) -> None:
         """Handle channel close event."""
@@ -123,7 +127,7 @@ class Transport(ABC):
         """Start background task to send queued messages."""
         if self._sender_task is None or self._sender_task.done():
             self._sender_task = asyncio.create_task(self._sender_loop())
-            logger.debug("Started message sender task")
+            logger.info("Started message sender task")
 
     def _stop_sender(self) -> None:
         """Stop background sender task."""
@@ -135,7 +139,7 @@ class Transport(ABC):
         """Start background task to read from stdin."""
         if self._stdin_reader_task is None or self._stdin_reader_task.done():
             self._stdin_reader_task = asyncio.create_task(self._stdin_reader_loop())
-            logger.debug("Started stdin reader task")
+            logger.info("Started stdin reader task")
 
     def _stop_stdin_reader(self) -> None:
         """Stop background stdin reader task."""
@@ -168,16 +172,20 @@ class Transport(ABC):
 
     async def _stdin_reader_loop(self) -> None:
         """Background task to read from stdin and send messages."""
+        logger.info("Stdin reader loop started")
         try:
             loop = asyncio.get_event_loop()
             while not self._shutdown_event.is_set():
                 try:
-                    # Read from stdin in executor to avoid blocking
-                    line = await loop.run_in_executor(None, sys.stdin.readline)
+                    # Try to read from stdin with very short timeout
+                    line = await asyncio.wait_for(
+                        loop.run_in_executor(None, sys.stdin.readline), timeout=0.1
+                    )
                     if not line:
                         continue
 
                     text = line.strip()
+                    logger.info(f"Read from stdin: '{text}'")
                     if text.lower() == "quit":
                         logger.info("User requested quit")
                         self._shutdown_event.set()
@@ -185,12 +193,17 @@ class Transport(ABC):
 
                     if text:  # Only send non-empty messages
                         if self._stdin_handler:
+                            logger.info("Using custom stdin handler")
                             self._stdin_handler(text)
                         else:
+                            logger.info("Using default send_text")
                             self.send_text(text)
                             print(f"me: {text}")
                             logger.info(f"[MESSAGE_SENT] {text}")
 
+                except asyncio.TimeoutError:
+                    # Timeout is normal, continue loop
+                    continue
                 except Exception as e:
                     logger.error(f"Error reading from stdin: {e}")
                     await asyncio.sleep(0.1)
@@ -198,6 +211,15 @@ class Transport(ABC):
             logger.debug("Stdin reader loop cancelled")
         except Exception as e:
             logger.error(f"Unexpected error in stdin reader loop: {e}")
+        logger.info("Stdin reader loop ended")
+
+    async def _test_stdin_reader(self) -> None:
+        """Test stdin reader by sending a test message."""
+        await asyncio.sleep(2.0)  # Wait 2 seconds
+        logger.info("Testing stdin reader - sending test message")
+        self.send_text("test from stdin reader")
+        print("me: test from stdin reader")
+        logger.info("[MESSAGE_SENT] test from stdin reader")
 
     async def _send_raw(self, data: bytes) -> None:
         """Send raw bytes over data channel."""
