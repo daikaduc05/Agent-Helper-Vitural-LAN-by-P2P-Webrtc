@@ -36,6 +36,7 @@ class Transport(ABC):
         self._stdin_reader_task: Optional[asyncio.Task] = None
         self._max_queue_size = max_queue_size
         self._shutdown_event = asyncio.Event()
+        self._stdin_handler: Optional[Callable[[str], None]] = None
 
         logger.debug(f"Transport initialized with max queue size: {max_queue_size}")
 
@@ -65,6 +66,16 @@ class Transport(ABC):
         """
         self._message_callback = callback
         logger.debug("Message callback registered")
+
+    def set_stdin_handler(self, handler: Callable[[str], None]) -> None:
+        """
+        Register custom stdin handler.
+
+        Args:
+            handler: Function to call with stdin text
+        """
+        self._stdin_handler = handler
+        logger.debug("Custom stdin handler registered")
 
     def set_default_message_handler(self) -> None:
         """Set up default message handler that logs received messages and prints to console."""
@@ -173,9 +184,12 @@ class Transport(ABC):
                         break
 
                     if text:  # Only send non-empty messages
-                        self.send_text(text)
-                        print(f"me: {text}")
-                        logger.info(f"[MESSAGE_SENT] {text}")
+                        if self._stdin_handler:
+                            self._stdin_handler(text)
+                        else:
+                            self.send_text(text)
+                            print(f"me: {text}")
+                            logger.info(f"[MESSAGE_SENT] {text}")
 
                 except Exception as e:
                     logger.error(f"Error reading from stdin: {e}")

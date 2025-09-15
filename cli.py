@@ -322,7 +322,7 @@ async def _interactive_json(
 
     transport = session.transport
 
-    # Set up message handler
+    # Set up custom message handler for JSON
     def on_message(data: bytes):
         try:
             import json
@@ -335,35 +335,25 @@ async def _interactive_json(
 
     transport.on_message(on_message)
 
+    # Set up custom stdin handler for JSON
+    def stdin_handler(text: str):
+        try:
+            import json
+
+            obj = json.loads(text)
+            transport.send_json(obj)
+            print(f"> {json.dumps(obj, indent=2)}")
+        except json.JSONDecodeError as e:
+            print(f"Error: Invalid JSON - {e}")
+
+    transport.set_stdin_handler(stdin_handler)
+
     print(f"JSON session with {peer_id} started. Type JSON objects and press Enter.")
     print("Type 'quit' to exit.")
 
-    # Start stdin reader
-    async def stdin_reader():
-        loop = asyncio.get_event_loop()
-        while not shutdown_event.is_set():
-            try:
-                line = await loop.run_in_executor(None, sys.stdin.readline)
-                if not line or line.strip() == "quit":
-                    shutdown_event.set()
-                    break
-
-                text = line.strip()
-                if text:
-                    try:
-                        import json
-
-                        obj = json.loads(text)
-                        transport.send_json(obj)
-                        print(f"> {json.dumps(obj, indent=2)}")
-                    except json.JSONDecodeError as e:
-                        print(f"Error: Invalid JSON - {e}")
-            except Exception as e:
-                logger.error(f"Error reading stdin: {e}")
-                break
-
-    # Run stdin reader
-    await stdin_reader()
+    # Transport already has stdin reader running from _on_channel_open
+    # Just wait for shutdown event
+    await shutdown_event.wait()
 
 
 async def _interactive_bytes(
@@ -377,7 +367,7 @@ async def _interactive_bytes(
 
     transport = session.transport
 
-    # Set up message handler
+    # Set up custom message handler for bytes
     def on_message(data: bytes):
         print(f"< [received {len(data)} bytes]")
         # Show hex dump for small data
@@ -387,39 +377,29 @@ async def _interactive_bytes(
 
     transport.on_message(on_message)
 
+    # Set up custom stdin handler for bytes
+    def stdin_handler(text: str):
+        try:
+            # Parse hex string
+            hex_data = text.replace(" ", "").replace("\n", "")
+            if len(hex_data) % 2 != 0:
+                print("Error: Hex string must have even length")
+                return
+
+            data = bytes.fromhex(hex_data)
+            transport.send_bytes(data)
+            print(f"> [sent {len(data)} bytes]")
+        except ValueError as e:
+            print(f"Error: Invalid hex - {e}")
+
+    transport.set_stdin_handler(stdin_handler)
+
     print(f"Bytes session with {peer_id} started. Type hex data and press Enter.")
     print("Type 'quit' to exit.")
 
-    # Start stdin reader
-    async def stdin_reader():
-        loop = asyncio.get_event_loop()
-        while not shutdown_event.is_set():
-            try:
-                line = await loop.run_in_executor(None, sys.stdin.readline)
-                if not line or line.strip() == "quit":
-                    shutdown_event.set()
-                    break
-
-                text = line.strip()
-                if text:
-                    try:
-                        # Parse hex string
-                        hex_data = text.replace(" ", "").replace("\n", "")
-                        if len(hex_data) % 2 != 0:
-                            print("Error: Hex string must have even length")
-                            continue
-
-                        data = bytes.fromhex(hex_data)
-                        transport.send_bytes(data)
-                        print(f"> [sent {len(data)} bytes]")
-                    except ValueError as e:
-                        print(f"Error: Invalid hex - {e}")
-            except Exception as e:
-                logger.error(f"Error reading stdin: {e}")
-                break
-
-    # Run stdin reader
-    await stdin_reader()
+    # Transport already has stdin reader running from _on_channel_open
+    # Just wait for shutdown event
+    await shutdown_event.wait()
 
 
 async def _interactive_tun(
